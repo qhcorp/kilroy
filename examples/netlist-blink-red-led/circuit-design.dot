@@ -224,6 +224,47 @@ Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH
 {\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
     ]
 
+    resolve_models [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+Read:
+- .ai/runs/$KILROY_RUN_ID/circuit.json
+
+Your job is to verify that every SPICE model referenced in circuit.json actually exists and is
+correctly included, BEFORE the netlist is generated. This prevents simulation failures from missing models.
+
+Step 1 — Check local model files:
+For each entry in the \"includes\" array, verify the file exists under models/kicad-spice-library/.
+For each component that has a \"model\" field (e.g., BJTs with Q2N3904, diodes with LED_GENERAL),
+open the corresponding included .lib file and confirm it contains a .model or .subckt line
+matching that exact name (case-sensitive).
+
+Step 2 — Fix mismatches:
+If a model name in a component doesn't match the name inside the .lib file, update circuit.json
+to use the correct name. Common issues:
+- Using \"led_red\" when the file defines \"LED_GENERAL\"
+- Using \"2N3904\" when the file defines \"Q2N3904\"
+- Missing entries in the \"includes\" array
+
+Step 3 — Search the web for missing models:
+If a required .lib file does NOT exist anywhere under models/kicad-spice-library/, search the web
+for the SPICE model definition (e.g., search \"Q2N3904 ngspice .model NPN parameters\").
+When you find a valid .model or .subckt definition, save it as a new .lib file under
+models/kicad-spice-library/Models/ in an appropriate subdirectory, and update the circuit.json
+\"includes\" array to reference it.
+
+Step 4 — Final validation:
+After all fixes, re-read circuit.json and confirm:
+- Every \"includes\" path resolves to a real file
+- Every component model name matches a definition in the included files
+- Write the corrected circuit.json back to .ai/runs/$KILROY_RUN_ID/circuit.json
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
     convert_to_netlist [
         shape=parallelogram,
         label="Convert JSON to Netlist",
@@ -321,7 +362,8 @@ Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH
     define_requirements -> choose_topology
     choose_topology -> produce_design
     produce_design -> generate_circuit_json
-    generate_circuit_json -> convert_to_netlist
+    generate_circuit_json -> resolve_models
+    resolve_models -> convert_to_netlist
     convert_to_netlist -> run_simulation
     run_simulation -> check_simulation
     check_simulation -> exit [condition="outcome=success"]

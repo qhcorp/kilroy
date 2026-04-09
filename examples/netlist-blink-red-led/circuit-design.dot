@@ -19,10 +19,9 @@ digraph circuit_design {
 
 Create a concise engineering requirements document for this circuit request.
 
-Read these reference docs first:
-- docs/electronics/11-design-procedures.md
-- docs/electronics/12-common-mistakes.md
-- docs/electronics/01-foundations.md
+Reference docs are available in docs/electronics/. Read docs/electronics/00-index.md first — it lists
+all available topics with one-line descriptions. Read whichever docs are relevant to this task before
+proceeding. At minimum, review the design procedures and common mistakes docs.
 
 Write the result to:
 - .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
@@ -47,10 +46,10 @@ Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH
 
 Read:
 - .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
-- docs/electronics/07-filters-oscillators.md
-- docs/electronics/04-bjt.md
-- docs/electronics/03-diodes.md
-- docs/electronics/08-power.md
+
+Reference docs are available in docs/electronics/. Read docs/electronics/00-index.md to discover
+relevant topics, then read the docs that apply to the component types and circuit techniques
+you are considering (e.g., oscillators, transistors, diodes, power regulation).
 
 Choose a practical circuit topology for this request and justify it. Prefer a robust, easy-to-build design over novelty.
 
@@ -89,7 +88,9 @@ Read:
 - .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
 - .ai/runs/$KILROY_RUN_ID/topology_decision.md
 - .ai/runs/$KILROY_RUN_ID/preliminary_bom.md
-- docs/electronics/12-common-mistakes.md
+
+Reference docs are available in docs/electronics/. Read docs/electronics/00-index.md to discover
+relevant topics. At minimum, review the common mistakes doc before finalizing your design.
 
 If .ai/runs/$KILROY_RUN_ID/failure_analysis.md exists, this is a design revision after
 simulation failure. Read it FIRST and:

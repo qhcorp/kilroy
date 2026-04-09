@@ -2,78 +2,14 @@
 """Convert a circuit JSON description to an ngspice netlist (.cir) file.
 
 Usage:
-    python3 json2netlist.py <input.json> <output.cir>
+    python3 json2netlist.py <input.json> <output.cir> [--models-dir <path>]
     python3 json2netlist.py < input.json > output.cir
 """
 
 import json
+import os
 import sys
 import re
-
-# ---------------------------------------------------------------------------
-# Built-in SPICE models and subcircuits
-# ---------------------------------------------------------------------------
-
-BUILTIN_MODELS = {
-    "LED_RED": ".model LED_RED D(IS=1e-20 N=1.8 RS=5 BV=5 IBV=100u EG=1.9 CJO=20p)",
-    "LED_GREEN": ".model LED_GREEN D(IS=1e-20 N=2.0 RS=6 BV=5 IBV=100u EG=2.2 CJO=20p)",
-    "LED_BLUE": ".model LED_BLUE D(IS=1e-20 N=2.5 RS=8 BV=5 IBV=100u EG=2.8 CJO=20p)",
-    "1N4148": ".model 1N4148 D(IS=2.52e-9 N=1.752 RS=0.568 BV=100 IBV=100u CJO=4p)",
-    "1N4001": ".model 1N4001 D(IS=29.5e-9 N=1.73 RS=0.17 BV=50 IBV=5u CJO=25p)",
-    "2N3904": ".model 2N3904 NPN(IS=6.734f BF=416.4 NF=1.259 VAF=74.03 IKF=66.78m ISE=6.734f NE=1.259 BR=0.7389 NR=2 VAR=28 IKR=0.7389 ISC=0 NC=2 RB=10 RE=0 RC=1 CJE=3.638p CJC=4.493p TF=301.2p TR=239.5n)",
-    "2N3906": ".model 2N3906 PNP(IS=1.41f BF=180.7 NF=1.5 VAF=18.7 IKF=80m ISE=0 NE=1.5 BR=4.977 NR=2 VAR=20 IKR=0 ISC=0 NC=2 RB=10 RE=0 RC=2.5 CJE=9.728p CJC=4.067p TF=500p TR=67n)",
-}
-
-# NE555 behavioral subcircuit for ngspice
-BUILTIN_SUBCIRCUITS = {
-    "NE555": """\
-* NE555 behavioral model for ngspice
-* Pins: GND TRIG OUT RESET CTRL THRESH DISCH VCC
-.subckt NE555 GND TRIG OUT RESET CTRL THRESH DISCH VCC
-* Internal voltage references
-R_ctrl VCC CTRL_INT 5k
-R_ctrl2 CTRL_INT GND_INT 5k
-R_ctrl3 GND_INT GND 5k
-* Control voltage output (2/3 VCC by default)
-R_cv CTRL_INT CTRL 10
-* Comparator thresholds
-* Upper comparator: THRESH vs CTRL (2/3 VCC)
-B_upper_cmp upper_cmp GND V = V(THRESH,GND) > V(CTRL,GND) ? 5 : 0
-* Lower comparator: TRIG vs 1/2 CTRL (1/3 VCC)
-B_lower_cmp lower_cmp GND V = V(TRIG,GND) < V(CTRL,GND)/2 ? 5 : 0
-* SR latch (behavioral)
-* S = lower_cmp (set when TRIG < 1/3 VCC)
-* R = upper_cmp OR !RESET (reset when THRESH > 2/3 VCC or RESET low)
-B_reset reset_active GND V = V(RESET,GND) < 0.7 ? 5 : 0
-B_latch_r latch_r GND V = (V(upper_cmp,GND) > 2.5) + (V(reset_active,GND) > 2.5) > 0.5 ? 5 : 0
-* Simple SR latch using RC + behavioral
-R_sr sr_node GND 1Meg
-C_sr sr_node GND 1n IC=0
-B_sr_drive sr_drive GND V = V(lower_cmp,GND) > 2.5 ? 5 : (V(latch_r,GND) > 2.5 ? 0 : V(sr_node,GND))
-R_sr_couple sr_drive sr_node 100
-* Output stage
-B_out OUT GND V = V(sr_node,GND) > 2.5 ? (V(VCC,GND) - 1.5) : 0.1
-* Discharge transistor (smooth behavioral conductance — avoids switch convergence)
-* When sr_node LOW (output high): discharge OFF (high impedance)
-* When sr_node HIGH→LOW: discharge ON (50 ohm to ground)
-B_disch DISCH GND I = V(DISCH,GND) / (50 + 1e6 * (1 + tanh((V(sr_node,GND) - 2.5) * 10)) / 2)
-.ends NE555""",
-}
-
-# SPICE element prefixes for component types
-ELEMENT_PREFIXES = {
-    "R": "R",
-    "C": "C",
-    "L": "L",
-    "D": "D",
-    "vdc": "V",
-    "vac": "V",
-    "vpulse": "V",
-    "idc": "I",
-}
-
-# Components that use subcircuits (instantiated with X prefix)
-SUBCIRCUIT_TYPES = set(BUILTIN_SUBCIRCUITS.keys())
 
 
 def parse_value(val):
@@ -86,19 +22,26 @@ def generate_component_line(comp):
     ref = comp["ref"]
     ctype = comp["type"]
 
-    # Subcircuit instance (IC)
-    if ctype in SUBCIRCUIT_TYPES:
+    # Subcircuit instance (IC) — referenced via .include from external model library
+    if ctype.startswith("X") or "pins" in comp:
         pins = comp["pins"]
-        # NE555 pin order: GND TRIG OUT RESET CTRL THRESH DISCH VCC
-        pin_order = {
-            "NE555": ["GND", "TRIG", "OUT", "RESET", "CTRL", "THRESH", "DISCH", "VCC"],
-        }
-        order = pin_order.get(ctype)
-        if order is None:
-            order = sorted(pins.keys())
-        node_list = " ".join(pins[p] for p in order)
+        pin_order = comp.get("pin_order")
+        if pin_order is None:
+            pin_order = sorted(pins.keys())
+        node_list = " ".join(pins[p] for p in pin_order)
+        subckt_name = comp.get("subcircuit", ctype)
         prefix = ref if ref.upper().startswith("X") else f"X{ref}"
-        return f"{prefix} {node_list} {ctype}"
+        return f"{prefix} {node_list} {subckt_name}"
+
+    # BJT transistor (Q prefix, 3 nodes: collector, base, emitter + model)
+    if ctype == "Q":
+        nodes = comp["nodes"]
+        if len(nodes) != 3:
+            raise ValueError(f"{ref}: BJT requires 3 nodes [collector, base, emitter], got {len(nodes)}")
+        model = comp.get("model", "Q_DEFAULT")
+        c, b, e = nodes
+        prefix = ref if ref.upper().startswith("Q") else f"Q{ref}"
+        return f"{prefix} {c} {b} {e} {model}"
 
     # Two-terminal components
     nodes = comp["nodes"]
@@ -147,20 +90,30 @@ def generate_component_line(comp):
     raise ValueError(f"{ref}: unknown component type '{ctype}'")
 
 
-def collect_models(components):
-    """Determine which .model and .subckt cards are needed."""
-    models_needed = set()
-    subcircuits_needed = set()
-
-    for comp in components:
-        ctype = comp["type"]
-        if ctype in SUBCIRCUIT_TYPES:
-            subcircuits_needed.add(ctype)
-        model = comp.get("model")
-        if model and model in BUILTIN_MODELS:
-            models_needed.add(model)
-
-    return models_needed, subcircuits_needed
+def resolve_includes(includes, models_dir):
+    """Resolve include paths and validate they exist. Returns list of absolute paths."""
+    resolved = []
+    for inc in includes:
+        # Try as-is (absolute or relative to CWD)
+        if os.path.isfile(inc):
+            resolved.append(os.path.abspath(inc))
+            continue
+        # Try relative to models_dir
+        candidate = os.path.join(models_dir, inc)
+        if os.path.isfile(candidate):
+            resolved.append(os.path.abspath(candidate))
+            continue
+        # Try inside kicad-spice-library submodule
+        candidate = os.path.join(models_dir, "kicad-spice-library", inc)
+        if os.path.isfile(candidate):
+            resolved.append(os.path.abspath(candidate))
+            continue
+        raise FileNotFoundError(
+            f"Model file not found: '{inc}'\n"
+            f"  Searched: {inc}, {os.path.join(models_dir, inc)}, "
+            f"{os.path.join(models_dir, 'kicad-spice-library', inc)}"
+        )
+    return resolved
 
 
 def generate_analysis(analysis):
@@ -200,28 +153,134 @@ def generate_plots(plots):
     return lines
 
 
-def convert(circuit):
+def generate_meas_statements(measures):
+    """Generate ngspice .meas statements and a meta structure for check_measures.py.
+
+    Returns (netlist_lines, meta_entries) where meta_entries carry the mapping
+    from measure IDs to ngspice variable names, computation type, and acceptance
+    criteria.
+    """
+    lines = []
+    meta = []
+
+    for m in measures:
+        mid = m["id"]
+        mtype = m["type"]
+        signal = m["signal"]
+        desc = m.get("description", "")
+        accept = m["accept"]
+        from_t = m.get("from")
+        to_t = m.get("to")
+
+        def _window():
+            parts = []
+            if from_t:
+                parts.append(f"from={from_t}")
+            if to_t:
+                parts.append(f"to={to_t}")
+            return " ".join(parts)
+
+        def _edge_keyword():
+            edge = m.get("edge", "rising")
+            return "RISE" if edge == "rising" else "FALL"
+
+        if mtype in ("max", "min", "avg", "rms"):
+            var = f"{mid}_{mtype}"
+            lines.append(f".meas tran {var} {mtype.upper()} {signal} {_window()}")
+            meta.append({
+                "id": mid, "description": desc, "computation": "direct",
+                "variables": [var],
+                "accept_min": accept["min"], "accept_max": accept["max"],
+            })
+
+        elif mtype == "peak_to_peak":
+            var_max = f"{mid}_max"
+            var_min = f"{mid}_min"
+            lines.append(f".meas tran {var_max} MAX {signal} {_window()}")
+            lines.append(f".meas tran {var_min} MIN {signal} {_window()}")
+            meta.append({
+                "id": mid, "description": desc, "computation": "difference",
+                "variables": [var_max, var_min],
+                "accept_min": accept["min"], "accept_max": accept["max"],
+            })
+
+        elif mtype == "frequency":
+            edge_kw = _edge_keyword()
+            td = from_t or "0"
+            var1 = f"{mid}_cross1"
+            var2 = f"{mid}_cross2"
+            lines.append(f".meas tran {var1} WHEN {signal}={m['threshold']} {edge_kw}=1 TD={td}")
+            lines.append(f".meas tran {var2} WHEN {signal}={m['threshold']} {edge_kw}=2 TD={td}")
+            meta.append({
+                "id": mid, "description": desc, "computation": "reciprocal_difference",
+                "variables": [var1, var2],
+                "accept_min": accept["min"], "accept_max": accept["max"],
+            })
+
+        elif mtype == "period":
+            edge_kw = _edge_keyword()
+            td = from_t or "0"
+            var1 = f"{mid}_cross1"
+            var2 = f"{mid}_cross2"
+            lines.append(f".meas tran {var1} WHEN {signal}={m['threshold']} {edge_kw}=1 TD={td}")
+            lines.append(f".meas tran {var2} WHEN {signal}={m['threshold']} {edge_kw}=2 TD={td}")
+            meta.append({
+                "id": mid, "description": desc, "computation": "plain_difference",
+                "variables": [var1, var2],
+                "accept_min": accept["min"], "accept_max": accept["max"],
+            })
+
+        elif mtype == "duty_cycle":
+            td = from_t or "0"
+            var_rise1 = f"{mid}_rise1"
+            var_fall1 = f"{mid}_fall1"
+            var_rise2 = f"{mid}_rise2"
+            lines.append(f".meas tran {var_rise1} WHEN {signal}={m['threshold']} RISE=1 TD={td}")
+            lines.append(f".meas tran {var_fall1} WHEN {signal}={m['threshold']} FALL=1 TD={td}")
+            lines.append(f".meas tran {var_rise2} WHEN {signal}={m['threshold']} RISE=2 TD={td}")
+            meta.append({
+                "id": mid, "description": desc, "computation": "ratio",
+                "variables": [var_rise1, var_fall1, var_rise2],
+                "accept_min": accept["min"], "accept_max": accept["max"],
+            })
+
+        elif mtype == "find_when":
+            edge_kw = _edge_keyword()
+            td = m.get("td", "0")
+            var = f"{mid}_when"
+            lines.append(f".meas tran {var} WHEN {signal}={m['value']} {edge_kw}=1 TD={td}")
+            meta.append({
+                "id": mid, "description": desc, "computation": "direct",
+                "variables": [var],
+                "accept_min": accept["min"], "accept_max": accept["max"],
+            })
+
+        else:
+            raise ValueError(f"Unknown measure type: {mtype}")
+
+    return lines, meta
+
+
+def convert(circuit, models_dir=None):
     """Convert a circuit dict to ngspice netlist lines."""
     title = circuit.get("title", "Untitled Circuit")
     components = circuit["components"]
     analysis = circuit["analysis"]
     plots = circuit.get("plots", [])
+    measures = circuit.get("measures", [])
+    includes = circuit.get("includes", [])
 
     lines = [f"* {title}", ""]
 
-    # Collect and emit models/subcircuits
-    models_needed, subcircuits_needed = collect_models(components)
-
-    if subcircuits_needed:
-        lines.append("* --- Subcircuit definitions ---")
-        for name in sorted(subcircuits_needed):
-            lines.append(BUILTIN_SUBCIRCUITS[name])
-            lines.append("")
-
-    if models_needed:
-        lines.append("* --- Device models ---")
-        for name in sorted(models_needed):
-            lines.append(BUILTIN_MODELS[name])
+    # Include external model files
+    if includes:
+        if models_dir is None:
+            # Default: models/ relative to repo root (parent of tools/)
+            models_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
+        resolved = resolve_includes(includes, models_dir)
+        lines.append("* --- Model includes ---")
+        for path in resolved:
+            lines.append(f".include {path}")
         lines.append("")
 
     # Simulation options
@@ -240,6 +299,14 @@ def convert(circuit):
     lines.append(generate_analysis(analysis))
     lines.append("")
 
+    # Measurement statements (placed before .control block)
+    meas_meta = []
+    if measures:
+        meas_lines, meas_meta = generate_meas_statements(measures)
+        lines.append("* --- Measurements ---")
+        lines.extend(meas_lines)
+        lines.append("")
+
     # Control block (always include .control/run for batch mode)
     if plots:
         lines.extend(generate_plots(plots))
@@ -248,24 +315,43 @@ def convert(circuit):
     lines.append("")
 
     lines.append(".end")
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n", meas_meta
 
 
 def main():
-    if len(sys.argv) == 3:
-        input_path = sys.argv[1]
-        output_path = sys.argv[2]
+    models_dir = None
+    args = sys.argv[1:]
+
+    # Parse --models-dir flag
+    if "--models-dir" in args:
+        idx = args.index("--models-dir")
+        if idx + 1 < len(args):
+            models_dir = args[idx + 1]
+            args = args[:idx] + args[idx + 2:]
+        else:
+            print("Error: --models-dir requires a path argument", file=sys.stderr)
+            sys.exit(1)
+
+    if len(args) == 2:
+        input_path = args[0]
+        output_path = args[1]
         with open(input_path) as f:
             circuit = json.load(f)
-        netlist = convert(circuit)
+        netlist, meas_meta = convert(circuit, models_dir)
         with open(output_path, "w") as f:
             f.write(netlist)
         print(f"Wrote netlist to {output_path}")
-    elif len(sys.argv) == 1:
+        if meas_meta:
+            meta_path = os.path.splitext(output_path)[0] + ".measures_meta.json"
+            with open(meta_path, "w") as f:
+                json.dump({"measures": meas_meta}, f, indent=2)
+            print(f"Wrote measures meta to {meta_path}")
+    elif len(args) == 0:
         circuit = json.load(sys.stdin)
-        sys.stdout.write(convert(circuit))
+        netlist, _ = convert(circuit, models_dir)
+        sys.stdout.write(netlist)
     else:
-        print(f"Usage: {sys.argv[0]} [input.json output.cir]", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} [input.json output.cir] [--models-dir <path>]", file=sys.stderr)
         sys.exit(1)
 
 

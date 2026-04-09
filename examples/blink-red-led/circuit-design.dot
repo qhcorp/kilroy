@@ -1,7 +1,7 @@
 digraph circuit_design {
     graph [
         goal="Design an electronic circuit that satisfies the user request.",
-        rankdir=LR,
+        rankdir=TB,
         default_max_retry="2",
         model_stylesheet="
             * { llm_model: claude-sonnet-4.6; llm_provider: anthropic; }

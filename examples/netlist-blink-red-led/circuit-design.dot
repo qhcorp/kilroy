@@ -1,8 +1,9 @@
 digraph circuit_design {
     graph [
         goal="Design an electronic circuit that blinks a red LED at 1 Hz from an automotive 12V source, and produce a validated ngspice netlist.",
-        rankdir=LR,
+        rankdir=TB,
         default_max_retry="2",
+        loop_restart_signature_limit="5",
         model_stylesheet="
             * { llm_model: claude-sonnet-4.6; llm_provider: anthropic; }
         "
@@ -18,7 +19,12 @@ digraph circuit_design {
 
 Create a concise engineering requirements document for this circuit request.
 
-Read any relevant repo docs first if they exist. Write the result to:
+Read these reference docs first:
+- docs/electronics/11-design-procedures.md
+- docs/electronics/12-common-mistakes.md
+- docs/electronics/01-foundations.md
+
+Write the result to:
 - .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
 
 The requirements document must include:
@@ -41,8 +47,20 @@ Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH
 
 Read:
 - .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+- docs/electronics/07-filters-oscillators.md
+- docs/electronics/04-bjt.md
+- docs/electronics/03-diodes.md
+- docs/electronics/08-power.md
 
 Choose a practical circuit topology for this request and justify it. Prefer a robust, easy-to-build design over novelty.
+
+IMPORTANT — component simulability constraint:
+The circuit will be validated with ngspice simulation. The netlist generation tool supports these
+component types natively: R, C, L, D (diodes/LEDs), Q (BJTs: 2N3904/2N3906), and voltage/current sources.
+For ICs (e.g., NE555, op-amps), the tool uses external SPICE model files from models/kicad-spice-library/.
+Before choosing an IC, check that a compatible .lib/.sub file exists in that directory.
+If no model is available for a desired IC, prefer a discrete transistor-based design that can be simulated
+reliably with standard SPICE primitives.
 
 Write these artifacts:
 - .ai/runs/$KILROY_RUN_ID/topology_decision.md
@@ -54,6 +72,7 @@ The topology decision must cover:
 - every major component and its role
 - the key sizing logic for component values, including timing or load-drive calculations when relevant
 - any design risks or assumptions that should be reviewed later
+- which SPICE model files will be needed (list the .lib/.sub paths from models/kicad-spice-library/)
 
 The BOM must list one component per line with reference designator class, suggested part, and purpose.
 
@@ -70,6 +89,13 @@ Read:
 - .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
 - .ai/runs/$KILROY_RUN_ID/topology_decision.md
 - .ai/runs/$KILROY_RUN_ID/preliminary_bom.md
+- docs/electronics/12-common-mistakes.md
+
+If .ai/runs/$KILROY_RUN_ID/failure_analysis.md exists, this is a design revision after
+simulation failure. Read it FIRST and:
+- Address every issue identified in the failure analysis
+- Do NOT repeat the same design choices that caused the failure
+- Explain what changed and why in the circuit_design.md
 
 Produce the actual circuit design artifacts for this request.
 
@@ -117,6 +143,12 @@ use to generate an ngspice netlist. Write the JSON to:
 The JSON schema is:
 {
   \"title\": \"<descriptive title>\",
+  \"includes\": [
+    // Paths to SPICE model files relative to models/kicad-spice-library/
+    // Example: \"Models/Manufacturer/TRT-Electronics/2n3904.lib\"
+    // Example: \"Models/Diode/led.lib\"
+    // List the model library files identified in topology_decision.md
+  ],
   \"components\": [
     // Two-terminal passives (R, C, L):
     {\"ref\": \"R1\", \"type\": \"R\", \"value\": \"10k\", \"nodes\": [\"node_a\", \"node_b\"]},
@@ -125,19 +157,19 @@ The JSON schema is:
     // DC voltage source:
     {\"ref\": \"V1\", \"type\": \"vdc\", \"value\": \"12\", \"nodes\": [\"pos_node\", \"neg_node\"]},
 
-    // Diode or LED (model must be one of: LED_RED, LED_GREEN, LED_BLUE, 1N4148, 1N4001):
-    {\"ref\": \"D1\", \"type\": \"D\", \"model\": \"LED_RED\", \"nodes\": [\"anode\", \"cathode\"]},
+    // Diode or LED (model name must match the .model name inside the included .lib file):
+    {\"ref\": \"D1\", \"type\": \"D\", \"model\": \"LED_GENERAL\", \"nodes\": [\"anode\", \"cathode\"]},
 
-    // NE555 timer IC (pins are named, order does not matter):
-    {\"ref\": \"U1\", \"type\": \"NE555\", \"pins\": {
-      \"GND\": \"0\", \"TRIG\": \"node\", \"OUT\": \"node\",
-      \"RESET\": \"node\", \"CTRL\": \"node\", \"THRESH\": \"node\",
-      \"DISCH\": \"node\", \"VCC\": \"node\"
-    }},
-
-    // BJT transistor (model must be one of: 2N3904, 2N3906):
+    // BJT transistor (model name must match the .model name inside the included .lib file):
     // nodes are [collector, base, emitter]
-    // NOT YET SUPPORTED — do not use BJTs
+    {\"ref\": \"Q1\", \"type\": \"Q\", \"model\": \"Q2N3904\", \"nodes\": [\"collector\", \"base\", \"emitter\"]},
+
+    // IC subcircuit (model name must match .subckt name inside the included .lib/.sub file):
+    // pins are named, pin_order specifies the subcircuit pin order from the .subckt definition
+    {\"ref\": \"U1\", \"type\": \"NE555\", \"subcircuit\": \"NE555\",
+     \"pins\": {\"GND\": \"0\", \"TRIG\": \"node\", \"OUT\": \"node\", \"RESET\": \"node\",
+               \"CTRL\": \"node\", \"THRESH\": \"node\", \"DISCH\": \"node\", \"VCC\": \"node\"},
+     \"pin_order\": [\"GND\", \"TRIG\", \"OUT\", \"RESET\", \"CTRL\", \"THRESH\", \"DISCH\", \"VCC\"]}
   ],
   \"analysis\": {
     \"type\": \"tran\",
@@ -146,18 +178,46 @@ The JSON schema is:
   },
   \"plots\": [
     {\"signals\": [\"v(out)\", \"v(thresh)\"], \"title\": \"description\"}
+  ],
+  \"measures\": [
+    // Each measure defines a quantitative acceptance test on the simulation.
+    // Supported types: max, min, avg, rms, peak_to_peak, frequency, period,
+    //                  duty_cycle, find_when
+    //
+    // All measures require: id (lowercase_snake_case), description, type, signal, accept ({min, max})
+    // Time-windowed types (max/min/avg/rms/peak_to_peak) also need: from, to
+    // Crossing types (frequency/period/duty_cycle) also need: threshold, edge (\"rising\"/\"falling\"), from, to
+    // find_when needs: value, edge, and optionally td (time delay before searching)
+
+    {\"id\": \"led_blink_freq\", \"description\": \"LED blinks at ~1 Hz\",
+     \"type\": \"frequency\", \"signal\": \"v(out)\", \"threshold\": 2.5,
+     \"edge\": \"rising\", \"from\": \"1s\", \"to\": \"5s\",
+     \"accept\": {\"min\": 0.8, \"max\": 1.2}},
+
+    {\"id\": \"output_high\", \"description\": \"Output goes high when LED on\",
+     \"type\": \"max\", \"signal\": \"v(out)\", \"from\": \"1s\", \"to\": \"5s\",
+     \"accept\": {\"min\": 8.0, \"max\": 12.0}}
   ]
 }
 
 CRITICAL RULES:
 - Node \"0\" is always ground.
-- Every ref must start with the correct SPICE prefix letter (R, C, L, D, V for sources, U for ICs).
+- Every ref must start with the correct SPICE prefix letter (R, C, L, D, V for sources, Q for BJTs).
+  For IC subcircuits, any ref is fine (the tool adds the X prefix automatically).
 - Use SI suffix strings for values: \"10k\", \"47u\", \"100n\", \"330\", \"12\".
 - All node names must be lowercase alphanumeric with underscores (no spaces or special chars).
 - The analysis step should be small enough to capture the circuit behavior (1ms is fine for 1Hz blink).
 - The stop time should be long enough to see several cycles.
 - Include at least one plot with the key signals to observe.
 - Write ONLY valid JSON — no comments, no trailing commas.
+- Include at least 3 measures that verify the key functional requirements from circuit_requirements.md.
+- The measures \"from\" time should skip initial transients (at least 1 second for circuits with startup behavior).
+- The measures \"to\" time must not exceed the analysis stop time.
+- Acceptance ranges should be realistic engineering tolerances (typically +/-20% for timing, +/-10% for voltages).
+- Every measure must have a unique \"id\" using lowercase_snake_case.
+- The measure \"signal\" must reference actual node names from the circuit (e.g., \"v(out)\", \"i(D1)\").
+- Before writing JSON, verify that every component node name appears in at least one other component's node list (no floating nodes except ground \"0\").
+- The \"includes\" array must list every external model file needed. Model names used in components (e.g., \"Q2N3904\", \"LED_GENERAL\") must match the .model or .subckt name defined inside the included file.
 
 Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
 {\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
@@ -166,13 +226,94 @@ Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH
     convert_to_netlist [
         shape=parallelogram,
         label="Convert JSON to Netlist",
-        tool_command="python3 $KILROY_REPO_ROOT/tools/json2netlist.py .ai/runs/$KILROY_RUN_ID/circuit.json .ai/runs/$KILROY_RUN_ID/circuit.cir"
+        tool_command="python3 tools/json2netlist.py .ai/runs/$KILROY_RUN_ID/circuit.json .ai/runs/$KILROY_RUN_ID/circuit.cir"
     ]
 
-    validate_netlist [
+    run_simulation [
         shape=parallelogram,
-        label="Validate Netlist with ngspice",
-        tool_command="ngspice -b .ai/runs/$KILROY_RUN_ID/circuit.cir"
+        label="Run SPICE Simulation Tests",
+        tool_command="python3 tools/check_measures.py .ai/runs/$KILROY_RUN_ID/circuit.cir .ai/runs/$KILROY_RUN_ID/circuit.measures_meta.json"
+    ]
+
+    check_simulation [shape=diamond, label="Simulation OK?"]
+
+    analyze_failure [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+The SPICE simulation failed. Your job is to classify the failure and decide the best repair path.
+
+Read:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+- .ai/runs/$KILROY_RUN_ID/topology_decision.md
+- .ai/runs/$KILROY_RUN_ID/circuit_design.md
+- .ai/runs/$KILROY_RUN_ID/circuit.json
+- .ai/runs/$KILROY_RUN_ID/measures_results.json (if it exists)
+
+Also read the failure dossier if available:
+- .ai/runs/$KILROY_RUN_ID/failure_dossier.json
+
+Classify the failure into one of two categories:
+
+PARAMETRIC FIX — choose this when:
+- Simulation ran and produced waveforms, but measure values are outside acceptance ranges
+- The circuit topology is correct but component values need adjustment (RC timing, resistor sizing, etc.)
+- Failed measures are within 2-3x of the acceptance range
+
+DESIGN RETHINK — choose this when:
+- ngspice convergence failure (singular matrix, no convergence, timestep too small)
+- All measures ERROR or the circuit produces no meaningful output
+- The output waveform shape is fundamentally wrong (e.g., no oscillation when expected, stuck at rail)
+- A previous parametric fix attempt already failed (check if failure_analysis.md already exists)
+- The failure is caused by a missing or incompatible SPICE model file
+
+Write your analysis to:
+- .ai/runs/$KILROY_RUN_ID/failure_analysis.md
+
+The analysis must include:
+- Which measures failed and by how much
+- Root cause diagnosis
+- Recommended fix approach
+- Whether this is a parametric issue or a fundamental design issue
+
+Then write your status with preferred_label set to your classification:
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH):
+{\"status\":\"success\",\"preferred_label\":\"parametric_fix\"} or
+{\"status\":\"success\",\"preferred_label\":\"design_rethink\"}"
+    ]
+
+    review_failures [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+The SPICE simulation tests failed and the failure was classified as a parametric issue.
+
+Read:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+- .ai/runs/$KILROY_RUN_ID/topology_decision.md
+- .ai/runs/$KILROY_RUN_ID/circuit_design.md
+- .ai/runs/$KILROY_RUN_ID/schematic_notes.md
+- .ai/runs/$KILROY_RUN_ID/circuit.json
+- .ai/runs/$KILROY_RUN_ID/measures_results.json
+- .ai/runs/$KILROY_RUN_ID/failure_analysis.md
+
+Analyze which measures failed and why. Common causes:
+- Wrong component values (resistor too large/small for desired current)
+- Timing component miscalculation (RC time constants)
+- Incorrect node connections
+- Missing or wrong analysis time window
+
+Fix the circuit.json file to address the failures. You MUST:
+1. Identify the root cause for each failed measure
+2. Calculate the correct component values
+3. Update ONLY the circuit.json file at .ai/runs/$KILROY_RUN_ID/circuit.json
+4. Keep the measures array — do not remove failing tests
+5. Explain your changes
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
     ]
 
     start -> define_requirements
@@ -180,6 +321,14 @@ Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH
     choose_topology -> produce_design
     produce_design -> generate_circuit_json
     generate_circuit_json -> convert_to_netlist
-    convert_to_netlist -> validate_netlist
-    validate_netlist -> exit
+    convert_to_netlist -> run_simulation
+    run_simulation -> check_simulation
+    check_simulation -> exit [condition="outcome=success"]
+    check_simulation -> analyze_failure [condition="outcome=fail && context.failure_class=deterministic"]
+    check_simulation -> analyze_failure [condition="outcome=fail && context.failure_class=transient_infra"]
+    check_simulation -> analyze_failure
+    analyze_failure -> review_failures [label="parametric_fix"]
+    analyze_failure -> produce_design [label="design_rethink"]
+    analyze_failure -> review_failures
+    review_failures -> convert_to_netlist
 }

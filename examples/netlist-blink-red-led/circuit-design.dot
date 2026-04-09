@@ -1,0 +1,185 @@
+digraph circuit_design {
+    graph [
+        goal="Design an electronic circuit that blinks a red LED at 1 Hz from an automotive 12V source, and produce a validated ngspice netlist.",
+        rankdir=LR,
+        default_max_retry="2",
+        model_stylesheet="
+            * { llm_model: claude-sonnet-4.6; llm_provider: anthropic; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    define_requirements [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+Create a concise engineering requirements document for this circuit request.
+
+Read any relevant repo docs first if they exist. Write the result to:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+
+The requirements document must include:
+- the functional behavior implied by the goal, with quantitative acceptance criteria where possible
+- operating assumptions for the power source and environment implied by the goal
+- output/load assumptions, including current, voltage, timing, and tolerance constraints as applicable
+- component constraints, including preference for widely available parts and simple topology
+- a verification plan that can be checked later without ambiguity
+
+Keep the document under 250 lines. Be concrete and quantitative.
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    choose_topology [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+Read:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+
+Choose a practical circuit topology for this request and justify it. Prefer a robust, easy-to-build design over novelty.
+
+Write these artifacts:
+- .ai/runs/$KILROY_RUN_ID/topology_decision.md
+- .ai/runs/$KILROY_RUN_ID/preliminary_bom.md
+
+The topology decision must cover:
+- the core circuit approach and why it is suitable for the goal
+- whether regulation, filtering, reverse-polarity protection, and transient suppression are needed
+- every major component and its role
+- the key sizing logic for component values, including timing or load-drive calculations when relevant
+- any design risks or assumptions that should be reviewed later
+
+The BOM must list one component per line with reference designator class, suggested part, and purpose.
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    produce_design [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+Read:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+- .ai/runs/$KILROY_RUN_ID/topology_decision.md
+- .ai/runs/$KILROY_RUN_ID/preliminary_bom.md
+
+Produce the actual circuit design artifacts for this request.
+
+Write:
+- .ai/runs/$KILROY_RUN_ID/circuit_design.md
+- .ai/runs/$KILROY_RUN_ID/final_bom.csv
+- .ai/runs/$KILROY_RUN_ID/schematic_notes.md
+
+Requirements for circuit_design.md:
+- describe the full circuit in clear implementation order
+- name all nodes and key component values
+- include the calculations needed to justify the design, such as timing, biasing, gain, filtering, or current-limit calculations as applicable
+- describe input protection, decoupling, and environmental robustness choices appropriate to the goal
+- include assembly notes and expected behavior at startup
+
+Requirements for final_bom.csv:
+- header row: item,designator,part,value_or_package,purpose
+- one component per row
+
+Requirements for schematic_notes.md:
+- textual net-by-net connection notes sufficient for a human to draw the schematic
+- include polarity-sensitive parts and orientation notes
+
+Do not leave placeholders. If a value is estimated, say so explicitly and keep it realistic.
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    generate_circuit_json [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+Read:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+- .ai/runs/$KILROY_RUN_ID/circuit_design.md
+- .ai/runs/$KILROY_RUN_ID/final_bom.csv
+- .ai/runs/$KILROY_RUN_ID/schematic_notes.md
+
+Convert the circuit design into a structured JSON file that a deterministic tool will
+use to generate an ngspice netlist. Write the JSON to:
+- .ai/runs/$KILROY_RUN_ID/circuit.json
+
+The JSON schema is:
+{
+  \"title\": \"<descriptive title>\",
+  \"components\": [
+    // Two-terminal passives (R, C, L):
+    {\"ref\": \"R1\", \"type\": \"R\", \"value\": \"10k\", \"nodes\": [\"node_a\", \"node_b\"]},
+    {\"ref\": \"C1\", \"type\": \"C\", \"value\": \"10u\", \"nodes\": [\"node_a\", \"0\"]},
+
+    // DC voltage source:
+    {\"ref\": \"V1\", \"type\": \"vdc\", \"value\": \"12\", \"nodes\": [\"pos_node\", \"neg_node\"]},
+
+    // Diode or LED (model must be one of: LED_RED, LED_GREEN, LED_BLUE, 1N4148, 1N4001):
+    {\"ref\": \"D1\", \"type\": \"D\", \"model\": \"LED_RED\", \"nodes\": [\"anode\", \"cathode\"]},
+
+    // NE555 timer IC (pins are named, order does not matter):
+    {\"ref\": \"U1\", \"type\": \"NE555\", \"pins\": {
+      \"GND\": \"0\", \"TRIG\": \"node\", \"OUT\": \"node\",
+      \"RESET\": \"node\", \"CTRL\": \"node\", \"THRESH\": \"node\",
+      \"DISCH\": \"node\", \"VCC\": \"node\"
+    }},
+
+    // BJT transistor (model must be one of: 2N3904, 2N3906):
+    // nodes are [collector, base, emitter]
+    // NOT YET SUPPORTED — do not use BJTs
+  ],
+  \"analysis\": {
+    \"type\": \"tran\",
+    \"step\": \"1ms\",
+    \"stop\": \"5s\"
+  },
+  \"plots\": [
+    {\"signals\": [\"v(out)\", \"v(thresh)\"], \"title\": \"description\"}
+  ]
+}
+
+CRITICAL RULES:
+- Node \"0\" is always ground.
+- Every ref must start with the correct SPICE prefix letter (R, C, L, D, V for sources, U for ICs).
+- Use SI suffix strings for values: \"10k\", \"47u\", \"100n\", \"330\", \"12\".
+- All node names must be lowercase alphanumeric with underscores (no spaces or special chars).
+- The analysis step should be small enough to capture the circuit behavior (1ms is fine for 1Hz blink).
+- The stop time should be long enough to see several cycles.
+- Include at least one plot with the key signals to observe.
+- Write ONLY valid JSON — no comments, no trailing commas.
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    convert_to_netlist [
+        shape=parallelogram,
+        label="Convert JSON to Netlist",
+        tool_command="python3 $KILROY_REPO_ROOT/tools/json2netlist.py .ai/runs/$KILROY_RUN_ID/circuit.json .ai/runs/$KILROY_RUN_ID/circuit.cir"
+    ]
+
+    validate_netlist [
+        shape=parallelogram,
+        label="Validate Netlist with ngspice",
+        tool_command="ngspice -b .ai/runs/$KILROY_RUN_ID/circuit.cir"
+    ]
+
+    start -> define_requirements
+    define_requirements -> choose_topology
+    choose_topology -> produce_design
+    produce_design -> generate_circuit_json
+    generate_circuit_json -> convert_to_netlist
+    convert_to_netlist -> validate_netlist
+    validate_netlist -> exit
+}

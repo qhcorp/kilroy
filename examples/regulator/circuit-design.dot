@@ -1,0 +1,137 @@
+digraph circuit_design {
+    graph [
+        goal="Design an electronic circuit that satisfies the user request.",
+        rankdir=LR,
+        default_max_retry="2",
+        model_stylesheet="
+            * { llm_model: claude-sonnet-4.6; llm_provider: anthropic; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    define_requirements [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+Create a concise engineering requirements document for this circuit request.
+
+Read any relevant repo docs first if they exist. Write the result to:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+
+The requirements document must include:
+- the functional behavior implied by the goal, with quantitative acceptance criteria where possible
+- operating assumptions for the power source and environment implied by the goal
+- output/load assumptions, including current, voltage, timing, and tolerance constraints as applicable
+- component constraints, including preference for widely available parts and simple topology
+- a verification plan that can be checked later without ambiguity
+
+Keep the document under 250 lines. Be concrete and quantitative.
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    choose_topology [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+Read:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+
+Choose a practical circuit topology for this request and justify it. Prefer a robust, easy-to-build design over novelty.
+
+Write these artifacts:
+- .ai/runs/$KILROY_RUN_ID/topology_decision.md
+- .ai/runs/$KILROY_RUN_ID/preliminary_bom.md
+
+The topology decision must cover:
+- the core circuit approach and why it is suitable for the goal
+- whether regulation, filtering, reverse-polarity protection, and transient suppression are needed
+- every major component and its role
+- the key sizing logic for component values, including timing or load-drive calculations when relevant
+- any design risks or assumptions that should be reviewed later
+
+The BOM must list one component per line with reference designator class, suggested part, and purpose.
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    produce_design [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+Read:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+- .ai/runs/$KILROY_RUN_ID/topology_decision.md
+- .ai/runs/$KILROY_RUN_ID/preliminary_bom.md
+
+Produce the actual circuit design artifacts for this request.
+
+Write:
+- .ai/runs/$KILROY_RUN_ID/circuit_design.md
+- .ai/runs/$KILROY_RUN_ID/final_bom.csv
+- .ai/runs/$KILROY_RUN_ID/schematic_notes.md
+
+Requirements for circuit_design.md:
+- describe the full circuit in clear implementation order
+- name all nodes and key component values
+- include the calculations needed to justify the design, such as timing, biasing, gain, filtering, or current-limit calculations as applicable
+- describe input protection, decoupling, and environmental robustness choices appropriate to the goal
+- include assembly notes and expected behavior at startup
+
+Requirements for final_bom.csv:
+- header row: item,designator,part,value_or_package,purpose
+- one component per row
+
+Requirements for schematic_notes.md:
+- textual net-by-net connection notes sufficient for a human to draw the schematic
+- include polarity-sensitive parts and orientation notes
+
+Do not leave placeholders. If a value is estimated, say so explicitly and keep it realistic.
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    review_design [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal
+
+Read:
+- .ai/runs/$KILROY_RUN_ID/circuit_requirements.md
+- .ai/runs/$KILROY_RUN_ID/topology_decision.md
+- .ai/runs/$KILROY_RUN_ID/preliminary_bom.md
+- .ai/runs/$KILROY_RUN_ID/circuit_design.md
+- .ai/runs/$KILROY_RUN_ID/final_bom.csv
+- .ai/runs/$KILROY_RUN_ID/schematic_notes.md
+
+Review the design critically as if preparing it for implementation.
+
+Write:
+- .ai/runs/$KILROY_RUN_ID/design_review.md
+
+The review must explicitly check:
+- whether the design satisfies the stated goal and acceptance criteria
+- correctness of the main sizing and component-selection logic
+- power-input and environment concerns implied by the requirements
+- whether the artifacts are complete enough for a human to build the circuit
+
+If the design is inadequate, write a failure status with a specific reason. If it is acceptable, write the review and exit normally.
+
+Write to $KILROY_STAGE_STATUS_PATH (fallback: $KILROY_STAGE_STATUS_FALLBACK_PATH) ONLY on failure:
+{\"status\":\"fail\",\"failure_reason\":\"design review found a blocking issue\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    start -> define_requirements
+    define_requirements -> choose_topology
+    choose_topology -> produce_design
+    produce_design -> review_design
+    review_design -> exit
+}

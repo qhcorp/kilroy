@@ -1,3 +1,0 @@
-[submodule "models/kicad-spice-library"]
-	path = models/kicad-spice-library
-	url = https://github.com/kicad-spice-library/KiCad-Spice-Library.git

@@ -103,7 +103,7 @@ def resolve_includes(includes, models_dir):
         if os.path.isfile(candidate):
             resolved.append(os.path.abspath(candidate))
             continue
-        # Try inside kicad-spice-library submodule
+        # Try inside kicad-spice-library
         candidate = os.path.join(models_dir, "kicad-spice-library", inc)
         if os.path.isfile(candidate):
             resolved.append(os.path.abspath(candidate))

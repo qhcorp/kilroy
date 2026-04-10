@@ -4,13 +4,13 @@ This directory contains SPICE model files used by `tools/json2netlist.py` to gen
 
 ## External Libraries
 
-### KiCad-Spice-Library (git submodule)
+### KiCad-Spice-Library
 
-Community-maintained collection of ngspice-compatible SPICE models. Added as a git submodule at `kicad-spice-library/`.
+Community-maintained collection of ngspice-compatible SPICE models, vendored at `kicad-spice-library/`.
 
 - **Source**: https://github.com/kicad-spice-library/KiCad-Spice-Library
 - **Contents**: ~1,100 model files (.lib, .mod, .sub) covering transistors, diodes, op-amps, ICs, etc.
-- **Update**: `git submodule update --remote models/kicad-spice-library`
+- **Update**: Re-clone from source and replace the directory
 
 ## How Models Are Used
 

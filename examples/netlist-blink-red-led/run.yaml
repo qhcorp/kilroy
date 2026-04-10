@@ -1,10 +1,10 @@
 version: 1
 
-graph: /Users/dpeckham/code/orgs/qhcorp/kilroy/examples/netlist-blink-red-led/circuit-design.dot
+graph: /Users/dpeckham/code/qhcorp/kilroy/examples/netlist-blink-red-led/circuit-design.dot
 task: "Design a circuit that blinks a red LED at 1 Hz from an automotive 12V source, and produce a validated ngspice netlist"
 
 repo:
-  path: /Users/dpeckham/code/orgs/qhcorp/kilroy
+  path: /Users/dpeckham/code/qhcorp/kilroy
 
 cxdb:
   binary_addr: 127.0.0.1:9009
@@ -25,7 +25,7 @@ llm:
         profile_family: anthropic
 
 modeldb:
-  openrouter_model_info_path: /Users/dpeckham/code/orgs/qhcorp/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
+  openrouter_model_info_path: /Users/dpeckham/code/qhcorp/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
   openrouter_model_info_update_policy: on_run_start
   openrouter_model_info_url: https://openrouter.ai/api/v1/models
   openrouter_model_info_fetch_timeout_ms: 5000
